@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Chat</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    body { display: flex; justify-content: center; }
+    .wrap { width: min(760px, 100%); height: 100vh; display: flex; flex-direction: column; padding: 16px; }
+    .embed .wrap { padding: 0; }
+    .embed .chat { border-radius: 0; border: 0; }
+    .chat { position: static; height: auto; flex: 1; }
+    .foot { text-align: center; padding: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card chat">
+      <div class="chat-head"><span id="icon" style="font-size:24px"></span>
+        <div class="grow" style="flex:1;min-width:0"><strong id="name">Loading…</strong><div class="muted small" id="desc"></div></div>
+        <button class="sm ghost" id="reset" title="New conversation">↺</button></div>
+      <div class="chat-body" id="body"></div>
+      <form class="chat-input" id="form"><input id="input" placeholder="Type a message…" autocomplete="off" disabled><button class="primary" disabled id="send">Send</button></form>
+    </div>
+    <div class="foot muted small" id="foot">Built with <a href="/" target="_blank">Agent Studio</a></div>
+  </div>
+  <script>
+    "use strict";
+    const slug = location.pathname.split("/").filter(Boolean).pop();
+    const params = new URLSearchParams(location.search);
+    if (params.get("embed") === "1") { document.body.classList.add("embed"); document.getElementById("foot").remove(); }
+    let token = null;
+    try { token = localStorage.getItem("studio.token"); } catch (_) { /* storage unavailable */ }
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const md = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
+    const headers = () => Object.assign({ "Content-Type": "application/json" }, token ? { Authorization: "Bearer " + token } : {});
+    let agent = null, convo = null, msgs = [];
+
+    function draw() {
+      const body = document.getElementById("body");
+      const starters = !msgs.length && agent.starters.length
+        ? `<div class="chips">${agent.starters.map((s) => `<span class="chip" data-s="${esc(s)}">${esc(s)}</span>`).join("")}</div>` : "";
+      body.innerHTML = (agent.greeting ? `<div class="msg bot">${md(agent.greeting)}</div>` : "") + starters +
+        msgs.map((m) => m.role === "pending" ? `<div class="msg bot typing">Thinking…</div>`
+          : `<div class="msg ${m.role === "user" ? "user" : "bot"}">${m.role === "user" ? esc(m.content) : md(m.content)}</div>`).join("");
+      body.querySelectorAll("[data-s]").forEach((c) => c.addEventListener("click", () => send(c.dataset.s)));
+      body.scrollTop = body.scrollHeight;
+    }
+
+    async function send(text) {
+      if (!text.trim()) return;
+      msgs.push({ role: "user", content: text }, { role: "pending" }); draw();
+      try {
+        const r = await fetch(`/api/public/agents/${encodeURIComponent(slug)}/chat`, {
+          method: "POST", headers: headers(), body: JSON.stringify({ message: text, conversation_id: convo }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || "Request failed");
+        convo = d.conversation_id; msgs.pop(); msgs.push({ role: "assistant", content: d.reply.text });
+      } catch (e) { msgs.pop(); msgs.push({ role: "assistant", content: "⚠️ " + e.message }); }
+      draw();
+    }
+
+    (async () => {
+      const r = await fetch(`/api/public/agents/${encodeURIComponent(slug)}`, { headers: headers() });
+      if (!r.ok) { document.getElementById("name").textContent = "This agent isn't available."; return; }
+      agent = await r.json();
+      document.title = agent.name;
+      document.getElementById("icon").textContent = agent.icon;
+      document.getElementById("name").textContent = agent.name;
+      document.getElementById("desc").textContent = agent.description;
+      document.getElementById("input").disabled = false; document.getElementById("send").disabled = false;
+      draw();
+    })();
+    document.getElementById("form").addEventListener("submit", (e) => {
+      e.preventDefault(); const i = document.getElementById("input"); const v = i.value; i.value = ""; send(v);
+    });
+    document.getElementById("reset").addEventListener("click", () => { convo = null; msgs = []; if (agent) draw(); });
+  </script>
+</body>
+</html>
